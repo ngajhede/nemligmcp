@@ -1,23 +1,33 @@
-# Self-hosted HTTP MCP server behind an existing Nginx Proxy Manager on the
-# npm_default network. No host port is published; the proxy forwards to
-# http://nemligmcp:3000. Configure NEMLIG_USER, NEMLIG_PASS and MCP_SECRET in .env.
-# The image is pulled from ghcr.io; to build it locally instead, run
-#   docker build -t ghcr.io/mikkelkaas/nemligmcp:latest .
+# Dokploy deployment. Traefik (Dokploy's proxy) only routes requests that carry
+# "Authorization: Bearer $MCP_TOKEN", strips that header, and forwards to the
+# container. The server additionally requires the secret path /mcp/$MCP_SECRET.
+# Set MCP_TOKEN, MCP_SECRET, NEMLIG_USER, NEMLIG_PASS and MCP_DOMAIN in
+# Dokploy's Environment tab. Do not add a domain in Dokploy's Domains tab for
+# this service: that would create a second route without the header check.
 services:
   nemligmcp:
-    image: ghcr.io/mikkelkaas/nemligmcp:latest
-    container_name: nemligmcp
+    build: .
     restart: unless-stopped
     init: true
-    env_file: .env
-    networks:
-      - proxy
+    environment:
+      MCP_SECRET: ${MCP_SECRET:?set MCP_SECRET}
+      NEMLIG_USER: ${NEMLIG_USER:?set NEMLIG_USER}
+      NEMLIG_PASS: ${NEMLIG_PASS:?set NEMLIG_PASS}
     read_only: true
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
+    networks:
+      - dokploy-network
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.nemligmcp.rule=Host(`${MCP_DOMAIN:?set MCP_DOMAIN}`) && Header(`Authorization`, `Bearer ${MCP_TOKEN:?set MCP_TOKEN}`)
+      - traefik.http.routers.nemligmcp.entrypoints=websecure
+      - traefik.http.routers.nemligmcp.tls.certresolver=letsencrypt
+      - traefik.http.routers.nemligmcp.middlewares=nemligmcp-strip-auth
+      - traefik.http.middlewares.nemligmcp-strip-auth.headers.customrequestheaders.Authorization=
+      - traefik.http.services.nemligmcp.loadbalancer.server.port=3000
 networks:
-  proxy:
+  dokploy-network:
     external: true
-    name: ${PROXY_NETWORK:-npm_default}
